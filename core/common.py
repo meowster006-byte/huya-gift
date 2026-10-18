@@ -278,9 +278,23 @@ def build_report_text(summary: Dict[str, Any]) -> str:
     gift_count = summary.get("gift_count", 0)
     details.append(("送礼", clean_gift_summary(gift_raw, summary.get("gift_success", False), gift_count)))
 
+    if "super_fan_gift_detail" in summary:
+        details.append((
+            "超粉虎粮",
+            clean_gift_summary(
+                summary["super_fan_gift_detail"],
+                summary.get("super_fan_gift_success", False),
+                summary.get("super_fan_gift_count", 0),
+            ),
+        ))
+
     left_count = summary.get("left_count")
     if left_count is not None:
         details.append(("余量", f"{left_count} 个"))
+
+    super_fan_left_count = summary.get("super_fan_left_count")
+    if super_fan_left_count is not None:
+        details.append(("超粉余量", f"{super_fan_left_count} 个"))
 
     lines.append("")
     lines.append("📋 执行明细：")
