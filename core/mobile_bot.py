@@ -11,12 +11,12 @@
    - 秒级直连完成打卡，亲密度 +5，无需启动浏览器。
 3. 【高精度勋章与亲密度提取】：
    - 基于 liveui.queryBadgeInfoList 拉取真实粉丝勋章、粉丝等级、当前亲密度、升级还需亲密度。
-4. 【包裹免费虎粮赠送】：
-   - 基于 getPackageGift / getSequence / consumeGiftSafe 查询并赠送虎粮；
-   - 赠送后再次查询包裹，以真实库存变化确认结果。
+4. 【包裹虎粮赠送】：
+   - 基于 getPackageGift / getSequence / consumeGiftSafe 分别赠送普通虎粮和超粉虎粮；
+   - 赠送后再次查询包裹，以各自的真实库存变化确认结果。
 5. 【企业微信全文本推送】：
    - 严格采用全文本格式 (msgtype: text)，清晰完整展示等级、亲密度进度、福利与打卡送粮详情。
-6. 【完全独立运行】：既可被 main.py 统一调用，也可直接独立运行 `python huya_v2.py`。
+6. 【完全独立运行】：既可被 main.py 统一调用，也可直接独立运行 `python -m core.mobile_bot`。
 """
 
 import argparse
@@ -207,7 +207,7 @@ class DailyTigerFoodClient(HuyaWupClient):
 
 
 class PackageGiftClient(HuyaWupClient):
-    """使用网页 H5 对应的 WUP 接口查询包裹并赠送虎粮。"""
+    """使用网页 H5 对应的 WUP 接口查询包裹并赠送指定道具。"""
 
     SEQUENCE_APP_KEY = "AzCXiouW6aLc4AsVGKAOOLlNLawNQsuV"
     CONSUME_GIFT_KEY = "Hi2UfWa8LhRM07ZjucWL9wzuX7okmGvd"
@@ -248,7 +248,7 @@ class PackageGiftClient(HuyaWupClient):
                 return val
         return "0"
 
-    def query_tiger_food(self, pid: int) -> PackageInventory:
+    def query_package_gifts(self, pid: int) -> tuple[str, list[PackageInventory]]:
         out = JceOutputStream()
         out.write_struct_begin(0)
         self._write_web_user_id(out, 0)
@@ -261,6 +261,7 @@ class PackageGiftClient(HuyaWupClient):
         payload = response_wrapper.get(0, {}) if isinstance(response_wrapper, dict) else {}
         gifts = payload.get(0, []) if isinstance(payload, dict) else []
 
+        inventory: dict[tuple[str, int], PackageInventory] = {}
         for gift in gifts if isinstance(gifts, list) else []:
             if not isinstance(gift, dict):
                 continue
@@ -268,19 +269,23 @@ class PackageGiftClient(HuyaWupClient):
             if not isinstance(simple_info, dict):
                 continue
             item_name = str(simple_info.get(3, ""))
-            if item_name == "虎粮":
-                return PackageInventory(
+            if item_name in ("虎粮", "超粉虎粮"):
+                item_type = int(simple_info.get(0, 0))
+                key = (item_name, item_type)
+                previous_count = inventory[key].count if key in inventory else 0
+                inventory[key] = PackageInventory(
                     signal_code=signal_code,
-                    item_type=int(simple_info.get(0, 0)),
+                    item_type=item_type,
                     item_name=item_name,
-                    count=int(gift.get(5, 0)),
+                    count=previous_count + int(gift.get(5, 0)),
                 )
+        return signal_code, list(inventory.values())
 
-        return PackageInventory(
-            signal_code=signal_code,
-            item_type=0,
-            item_name="虎粮",
-            count=0,
+    def query_tiger_food(self, pid: int) -> PackageInventory:
+        signal_code, gifts = self.query_package_gifts(pid)
+        return next(
+            (gift for gift in gifts if gift.item_name == "虎粮"),
+            PackageInventory(signal_code, 0, "虎粮", 0),
         )
 
     def _get_sequence(self) -> str:
@@ -312,14 +317,14 @@ class PackageGiftClient(HuyaWupClient):
             )
         return sequence
 
-    def send_tiger_food(
+    def send_package_gift(
         self,
         pid: int,
         item_type: int,
         count: int,
     ) -> GiftSendResponse:
         if pid <= 0 or item_type <= 0 or count <= 0:
-            raise ValueError("主播 PID、虎粮道具 ID 和赠送数量必须为正整数")
+            raise ValueError("主播 PID、包裹道具 ID 和赠送数量必须为正整数")
 
         pay_id = self._get_sequence()
         passport = self.cookies.get("username", "")
@@ -607,8 +612,8 @@ class HuyaMobileBotV2:
 
         return result
 
-    def send_tiger_food(self) -> dict:
-        """通过纯 WUP 协议查询库存、赠送虎粮并复查实际余量。"""
+    def _send_package_gift(self, item_name: str) -> dict:
+        """按包裹道具名称赠送，并用同一道具的库存变化确认结果。"""
         nick = self.room_info.get("nick") or "目标主播"
         result = {
             "success": False,
@@ -622,24 +627,29 @@ class HuyaMobileBotV2:
             return result
 
         try:
-            before = self.package_client.query_tiger_food(self.pid)
-            if before.signal_code != "0":
+            signal_code, gifts = self.package_client.query_package_gifts(self.pid)
+            if signal_code != "0":
                 result["detail"] = (
-                    f"虎粮库存查询失败（协议码 {before.signal_code or '缺失'}）"
+                    f"{item_name}库存查询失败（协议码 {signal_code or '缺失'}）"
                 )
                 return result
 
+            matches = [gift for gift in gifts if gift.item_name == item_name]
+            if len(matches) > 1:
+                raise RuntimeError(f"包裹中存在多个{item_name}条目，无法安全选择道具")
+            before = matches[0] if matches else PackageInventory(signal_code, 0, item_name, 0)
+
             result["left_count"] = before.count
-            log("INFO", f"【WUP 包裹检查】当前虎粮库存: {before.count} 个")
+            log("INFO", f"【WUP 包裹检查】当前{item_name}库存: {before.count} 个")
             if before.count <= 0:
                 result.update(
                     success=True,
-                    status="暂无虎粮",
-                    detail="包裹中暂无虎粮",
+                    status=f"暂无{item_name}",
+                    detail=f"包裹中暂无{item_name}",
                 )
                 return result
             if before.item_type <= 0:
-                result["detail"] = "查询到虎粮库存，但未取得有效道具 ID"
+                result["detail"] = f"查询到{item_name}库存，但未取得有效道具 ID"
                 return result
 
             send_count = (
@@ -649,10 +659,10 @@ class HuyaMobileBotV2:
             )
             log(
                 "INFO",
-                f"准备通过 WUP 向主播 [{nick}] 赠送 {send_count} 个虎粮"
+                f"准备通过 WUP 向主播 [{nick}] 赠送 {send_count} 个{item_name}"
                 f"（赠送前库存: {before.count}）",
             )
-            response = self.package_client.send_tiger_food(
+            response = self.package_client.send_package_gift(
                 self.pid, before.item_type, send_count
             )
             if response.signal_code != "0" or response.pay_code != 0:
@@ -668,9 +678,12 @@ class HuyaMobileBotV2:
             for attempt in range(3):
                 if attempt:
                     time.sleep(0.5)
-                candidate = self.package_client.query_tiger_food(self.pid)
-                if candidate.signal_code == "0":
-                    after = candidate
+                candidate_code, candidate_gifts = self.package_client.query_package_gifts(self.pid)
+                if candidate_code == "0":
+                    matching = [gift for gift in candidate_gifts if gift.item_name == item_name]
+                    if len(matching) > 1:
+                        raise RuntimeError(f"包裹中存在多个{item_name}条目，无法复查库存")
+                    after = matching[0] if matching else PackageInventory(candidate_code, before.item_type, item_name, 0)
                     if after.count == expected_count:
                         break
 
@@ -691,15 +704,21 @@ class HuyaMobileBotV2:
                 count=send_count,
                 status="赠送成功",
                 detail=(
-                    f"成功送出 {send_count} 个虎粮（库存 {before.count} → {after.count}）"
+                    f"成功送出 {send_count} 个{item_name}（库存 {before.count} → {after.count}）"
                 ),
             )
             log("SUCCESS", f"🎉 {result['detail']}")
             return result
         except Exception as exc:
-            log("ERROR", f"WUP 送虎粮过程异常: {exc}")
+            log("ERROR", f"WUP 送{item_name}过程异常: {exc}")
             result["detail"] = f"送礼异常: {exc}"
             return result
+
+    def send_tiger_food(self) -> dict:
+        return self._send_package_gift("虎粮")
+
+    def send_super_fan_food(self) -> dict:
+        return self._send_package_gift("超粉虎粮")
 
     def execute(self) -> dict:
         """运行 v2 完整流程"""
@@ -716,6 +735,10 @@ class HuyaMobileBotV2:
             "welfare_detail": "跳过福利",
             "gift_success": False,
             "gift_detail": "未赠送",
+            "super_fan_gift_success": False,
+            "super_fan_gift_detail": "未赠送",
+            "super_fan_gift_count": 0,
+            "super_fan_left_count": None,
             "left_count": None,
             "fans_level": "",
             "need_intimacy": "",
@@ -730,6 +753,7 @@ class HuyaMobileBotV2:
             summary["daka_detail"] = "登录失败"
             summary["welfare_detail"] = "登录失败"
             summary["gift_detail"] = "登录失败"
+            summary["super_fan_gift_detail"] = "登录失败"
         else:
             if self.do_daka:
                 daka_res = self.mobile_punch_card()
@@ -757,6 +781,12 @@ class HuyaMobileBotV2:
             summary["gift_count"] = gift_res.get("count", 0)
             summary["left_count"] = gift_res.get("left_count")
 
+            super_fan_res = self.send_super_fan_food()
+            summary["super_fan_gift_success"] = super_fan_res.get("success", False)
+            summary["super_fan_gift_detail"] = super_fan_res.get("detail", "")
+            summary["super_fan_gift_count"] = super_fan_res.get("count", 0)
+            summary["super_fan_left_count"] = super_fan_res.get("left_count")
+
             badge_info = self.query_badge_wup()
             summary["fans_level"] = badge_info.get("fans_level", "")
             summary["badge_name"] = badge_info.get("badge_name", "")
@@ -766,9 +796,9 @@ class HuyaMobileBotV2:
             summary["current_score"] = raw.get("current_score")
             summary["next_score"] = raw.get("next_score")
 
-            # 今日亲密度 = 打卡亲密度 + 送虎粮个数 (直接读取接口返回信息计算，保证准确)
+            # 今日亲密度按已确认赠送的两类虎粮数量累计。
             daka_intimacy = summary.get("daka_intimacy", 0)
-            gift_intimacy = summary.get("gift_count", 0)
+            gift_intimacy = summary.get("gift_count", 0) + summary.get("super_fan_gift_count", 0)
             summary["today_score"] = str(daka_intimacy + gift_intimacy)
             summary["today_quota"] = str(badge_info.get("quota_score", 4000) or 4000)
 
@@ -776,6 +806,7 @@ class HuyaMobileBotV2:
                 summary["daka_success"],
                 summary["welfare_success"],
                 summary["gift_success"],
+                summary["super_fan_gift_success"],
             ))
 
         if self.wechat_push:
