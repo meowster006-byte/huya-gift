@@ -130,10 +130,7 @@ class HuyaWebBotV1:
                         "path": "/"
                     })
             if cookies_to_add:
-                try:
-                    self.context.add_cookies(cookies_to_add)
-                except Exception as e:
-                    log("WARN", f"注入 Cookie 失败: {e}")
+                self.context.add_cookies(cookies_to_add)
 
     def _close_browser(self):
         """释放浏览器资源"""
@@ -147,6 +144,20 @@ class HuyaWebBotV1:
             log("INFO", "已释放浏览器资源。")
         except Exception:
             pass
+
+    def visit_room_for_daily_gift(self) -> None:
+        """使用现有 Cookie 打开直播间，触发网页端每日上线发放。"""
+        try:
+            self._init_browser()
+            response = self.page.goto(
+                self.room_url, wait_until="domcontentloaded", timeout=30000
+            )
+            if response is None or response.status >= 400:
+                status = response.status if response else "无响应"
+                raise RuntimeError(f"直播间打开失败（HTTP {status}）")
+            self.page.wait_for_timeout(5000)
+        finally:
+            self._close_browser()
 
     def ensure_logged_in(self) -> bool:
         """确保浏览器具备有效登录态"""
