@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-虎牙每日自动助手 - v2 移动 App 端纯协议版本 (Huya Mobile App Bot v2)
+虎牙每日自动助手 - v2 协议送礼与网页上线版本 (Huya Mobile App Bot v2)
 功能特性：
 1. 【移动端专属福利（10 虎粮）】：
    - 基于 queryFansGroupTaskInfo 精确探查每日粉丝团福利状态 (可领/已领/计时中)；
@@ -12,6 +12,7 @@
 3. 【高精度勋章与亲密度提取】：
    - 基于 liveui.queryBadgeInfoList 拉取真实粉丝勋章、粉丝等级、当前亲密度、升级还需亲密度。
 4. 【包裹虎粮赠送】：
+   - 先使用 Chromium 携带 Cookie 访问目标直播间，触发每日超粉虎粮发放；
    - 基于 getPackageGift / getSequence / consumeGiftSafe 分别赠送普通虎粮和超粉虎粮；
    - 赠送后再次查询包裹，以各自的真实库存变化确认结果。
 5. 【企业微信全文本推送】：
@@ -720,6 +721,23 @@ class HuyaMobileBotV2:
     def send_super_fan_food(self) -> dict:
         return self._send_package_gift("超粉虎粮")
 
+    def activate_super_fan_food(self) -> dict:
+        """访问目标直播间，触发网页端的每日超粉虎粮发放。"""
+        from .web_bot import HuyaWebBotV1
+
+        try:
+            visitor = HuyaWebBotV1({
+                "ROOM_URL": self.room_url,
+                "COOKIE": self.cookie_str,
+                "HEADLESS": True,
+            })
+            visitor.visit_room_for_daily_gift()
+            log("SUCCESS", "已使用登录 Cookie 访问直播间，等待超粉虎粮入包裹")
+            return {"success": True, "detail": "已访问直播间"}
+        except Exception as exc:
+            log("ERROR", f"超粉虎粮每日上线触发失败: {exc}")
+            return {"success": False, "detail": f"访问直播间失败: {exc}"}
+
     def execute(self) -> dict:
         """运行 v2 完整流程"""
         log("INFO", "========== 启动虎牙每日自动助手 v2 ==========")
@@ -739,6 +757,8 @@ class HuyaMobileBotV2:
             "super_fan_gift_detail": "未赠送",
             "super_fan_gift_count": 0,
             "super_fan_left_count": None,
+            "super_fan_activation_success": False,
+            "super_fan_activation_detail": "未访问直播间",
             "left_count": None,
             "fans_level": "",
             "need_intimacy": "",
@@ -754,6 +774,7 @@ class HuyaMobileBotV2:
             summary["welfare_detail"] = "登录失败"
             summary["gift_detail"] = "登录失败"
             summary["super_fan_gift_detail"] = "登录失败"
+            summary["super_fan_activation_detail"] = "登录失败"
         else:
             if self.do_daka:
                 daka_res = self.mobile_punch_card()
@@ -774,6 +795,10 @@ class HuyaMobileBotV2:
             else:
                 summary["welfare_success"] = True
                 summary["welfare_detail"] = "配置跳过福利"
+
+            activation_res = self.activate_super_fan_food()
+            summary["super_fan_activation_success"] = activation_res["success"]
+            summary["super_fan_activation_detail"] = activation_res["detail"]
 
             gift_res = self.send_tiger_food()
             summary["gift_success"] = gift_res.get("success", False)
@@ -807,6 +832,7 @@ class HuyaMobileBotV2:
                 summary["welfare_success"],
                 summary["gift_success"],
                 summary["super_fan_gift_success"],
+                summary["super_fan_activation_success"],
             ))
 
         if self.wechat_push:
