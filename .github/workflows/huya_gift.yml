@@ -16,7 +16,7 @@ on:
         type: string
         default: ""
       gift_count:
-        description: 送虎粮个数（0 为全部）
+        description: 每种虎粮的赠送上限（0 为各自全部）
         type: string
         default: "0"
       daka:
@@ -57,8 +57,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 安装 V1 浏览器
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.version == 'v1') || (github.event_name != 'workflow_dispatch' && vars.HUYA_VERSION == 'v1') }}
+      - name: 安装浏览器
         run: |
           playwright install --with-deps chromium
 
