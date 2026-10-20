@@ -274,6 +274,9 @@ def build_report_text(summary: Dict[str, Any]) -> str:
     if welfare_raw and welfare_raw != "跳过福利":
         details.append(("福利", clean_welfare_summary(welfare_raw, summary.get("welfare_success", False))))
 
+    if "super_fan_gift_detail" in summary:
+        details.append(("超粉上线", summary.get("super_fan_activation_detail", "未访问直播间")))
+
     gift_raw = summary.get("gift_detail", "未执行")
     gift_count = summary.get("gift_count", 0)
     details.append(("送礼", clean_gift_summary(gift_raw, summary.get("gift_success", False), gift_count)))
