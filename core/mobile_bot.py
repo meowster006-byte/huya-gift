@@ -84,6 +84,7 @@ class WelfareStatus:
     signal_code: str
     business_code: int
     state: int
+    diagnostic: str = ""
 
     @property
     def description(self) -> str:
@@ -183,6 +184,7 @@ class DailyTigerFoodClient(HuyaWupClient):
             signal_code=signal_code,
             business_code=int(payload.get(0, -1)) if isinstance(payload, dict) else -1,
             state=int(day_welfare.get(0, 0)) if isinstance(day_welfare, dict) else 0,
+            diagnostic=self.response_shape(response),
         )
 
     def claim_welfare(self, pid: int) -> ClaimResponse:
@@ -260,6 +262,11 @@ class PackageGiftClient(HuyaWupClient):
         signal_code = self._signal_code(root)
         response_wrapper = response.get("tRsp", {})
         payload = response_wrapper.get(0, {}) if isinstance(response_wrapper, dict) else {}
+        if not isinstance(payload, dict) or 0 not in payload or not isinstance(payload[0], list):
+            raise ValueError(
+                "getPackageGift 响应结构异常（"
+                f"协议码 {signal_code}，{self.response_shape(response)}）"
+            )
         gifts = payload.get(0, []) if isinstance(payload, dict) else []
 
         inventory: dict[tuple[str, int], PackageInventory] = {}
@@ -557,7 +564,10 @@ class HuyaMobileBotV2:
             # 1. 探查任务状态
             before = self.welfare_client.query_welfare(self.pid)
             if before.signal_code != "0" or before.business_code != 0:
-                result["detail"] = f"福利状态查询失败（协议码 {before.signal_code or '缺失'}）"
+                result["detail"] = (
+                    f"福利状态查询失败（协议码 {before.signal_code or '缺失'}，"
+                    f"业务码 {before.business_code}，{before.diagnostic}）"
+                )
                 return result
             log("INFO", f"【移动端福利探查】当前状态: {before.description} (状态码: {before.state})")
 
