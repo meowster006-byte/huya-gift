@@ -348,6 +348,18 @@ class HuyaWupClient:
                 return val
         return "0"
 
+    @staticmethod
+    def response_shape(response: Dict[str, Any]) -> str:
+        """仅描述解码结构，不记录响应值或登录凭证。"""
+        wrapper = response.get("tRsp")
+        payload = wrapper.get(0) if isinstance(wrapper, dict) else None
+        wrapper_tags = sorted(k for k in wrapper if isinstance(k, int)) if isinstance(wrapper, dict) else []
+        payload_tags = sorted(k for k in payload if isinstance(k, int)) if isinstance(payload, dict) else []
+        return (
+            f"tRsp类型={type(wrapper).__name__}, tRsp字段={wrapper_tags}, "
+            f"payload类型={type(payload).__name__}, payload字段={payload_tags}"
+        )
+
     def query_fans_sign(self, pid: int) -> FansSignStatus:
         """查询当天粉丝团打卡状态，不产生打卡副作用。"""
         root, rsp = self._send_wup(
@@ -359,7 +371,9 @@ class HuyaWupClient:
         return FansSignStatus(
             signal_code=self._signal_code(root),
             business_code=int(payload.get(0, -1)) if isinstance(payload, dict) else -1,
-            message=str(payload.get(1, "")) if isinstance(payload, dict) else "",
+            message=(
+                str(payload.get(1, "")) if isinstance(payload, dict) else ""
+            ) or f"响应结构: {self.response_shape(rsp)}",
             position=int(sign_info.get(0, 0)) if isinstance(sign_info, dict) else 0,
             position_time=int(sign_info.get(1, 0)) if isinstance(sign_info, dict) else 0,
             sign_flags=int(sign_info.get(2, 0)) if isinstance(sign_info, dict) else 0,
