@@ -127,22 +127,25 @@ class DailyTigerFoodClient(HuyaWupClient):
         if not uid_text.isdigit() or int(uid_text) <= 0:
             raise ValueError("Cookie 中缺少有效的 yyuid/udb_uid")
         self.uid = int(uid_text)
+        self.app_ua = os.getenv("HUYA_APP_UA", DEFAULT_APP_UA).strip() or DEFAULT_APP_UA
+        self.ua = self.app_ua
         self.user_id_bytes = self._encode_app_user_id()
 
     def _encode_app_user_id(self) -> bytes:
-        token_type_text = os.getenv("HUYA_TOKEN_TYPE", "2").strip() or "2"
+        token = os.getenv("HUYA_UDB_TOKEN", "").strip()
+        token_type_text = os.getenv("HUYA_TOKEN_TYPE", "").strip()
         try:
-            token_type = int(token_type_text)
+            token_type = int(token_type_text) if token_type_text else (2 if token else 0)
         except ValueError as exc:
             raise ValueError("HUYA_TOKEN_TYPE 必须是整数") from exc
 
         out = JceOutputStream()
         out.write_struct_begin(0)
         out.write_long(self.uid, 0)
-        out.write_string(os.getenv("HUYA_APP_GUID", "").strip(), 1)
-        out.write_string(os.getenv("HUYA_UDB_TOKEN", "").strip(), 2)
-        out.write_string(os.getenv("HUYA_APP_UA", DEFAULT_APP_UA).strip() or DEFAULT_APP_UA, 3)
-        out.write_string(self.cookie_str, 4)
+        out.write_string(os.getenv("HUYA_APP_GUID", "").strip() or self.guid, 1)
+        out.write_string(token, 2)
+        out.write_string(self.app_ua, 3)
+        out.write_string(self.clean_cookie, 4)
         out.write_int(token_type, 5)
         out.write_string(
             os.getenv("HUYA_DEVICE_MODEL", DEFAULT_DEVICE_MODEL).strip()
@@ -159,13 +162,10 @@ class DailyTigerFoodClient(HuyaWupClient):
         out.write_struct_end()
 
     @staticmethod
-    def _signal_status(root: dict[int, Any]) -> tuple[str, str]:
+    def _signal_status(root: dict[int, Any], response: Optional[dict[str, Any]] = None) -> tuple[str, str]:
         status = root.get(10, {})
-        if not isinstance(status, dict):
-            return "0", ""
-        code = str(status.get("SIGNAL_SERVICE_RET", "")).strip() or "0"
-        desc = str(status.get("STATUS_RESULT_DESC", ""))
-        return code, desc
+        desc = str(status.get("STATUS_RESULT_DESC", "")) if isinstance(status, dict) else ""
+        return HuyaWupClient._signal_code(root, response), desc
 
     def query_welfare(self, pid: int) -> WelfareStatus:
         out = JceOutputStream()
@@ -176,7 +176,7 @@ class DailyTigerFoodClient(HuyaWupClient):
         out.write_struct_end()
 
         root, response = self._send_wup("wupui", "queryFansGroupTaskInfo", out.get_bytes())
-        signal_code, _ = self._signal_status(root)
+        signal_code, _ = self._signal_status(root, response)
         response_wrapper = response.get("tRsp", {})
         payload = response_wrapper.get(0, {}) if isinstance(response_wrapper, dict) else {}
         day_welfare = payload.get(7, {}) if isinstance(payload, dict) else {}
@@ -196,7 +196,7 @@ class DailyTigerFoodClient(HuyaWupClient):
         out.write_struct_end()
 
         root, response = self._send_wup("wupui", "operateFansBox", out.get_bytes())
-        signal_code, signal_description = self._signal_status(root)
+        signal_code, signal_description = self._signal_status(root, response)
         response_wrapper = response.get("tRsp", {})
         payload = response_wrapper.get(0, {}) if isinstance(response_wrapper, dict) else {}
         business_code = payload.get(0) if isinstance(payload, dict) else None
@@ -221,6 +221,7 @@ class PackageGiftClient(HuyaWupClient):
     def __init__(self, cookie_text: str):
         self.cookies = parse_cookie(cookie_text)
         super().__init__(cookie_text)
+        self.ua = self.WEB_UA
         if self.uid <= 0:
             raise ValueError("Cookie 中缺少有效的 yyuid/udb_uid")
         self.web_user_id_bytes = self._encode_web_user_id()
@@ -232,7 +233,7 @@ class PackageGiftClient(HuyaWupClient):
         out.write_string("", 1)
         out.write_string("", 2)
         out.write_string(self.WEB_UA, 3)
-        out.write_string(self.cookie_str, 4)
+        out.write_string(self.clean_cookie, 4)
         out.write_int(0, 5)
         out.write_struct_end()
         return out.get_bytes()
@@ -243,13 +244,8 @@ class PackageGiftClient(HuyaWupClient):
         out.write_struct_end()
 
     @staticmethod
-    def _signal_code(root: dict[int, Any]) -> str:
-        status = root.get(10, {})
-        if isinstance(status, dict) and "SIGNAL_SERVICE_RET" in status:
-            val = str(status.get("SIGNAL_SERVICE_RET", "")).strip()
-            if val:
-                return val
-        return "0"
+    def _signal_code(root: dict[int, Any], response: Optional[dict[str, Any]] = None) -> str:
+        return HuyaWupClient._signal_code(root, response)
 
     def query_package_gifts(self, pid: int) -> tuple[str, list[PackageInventory]]:
         out = JceOutputStream()
@@ -259,7 +255,7 @@ class PackageGiftClient(HuyaWupClient):
         out.write_struct_end()
 
         root, response = self._send_wup("wupui", "getPackageGift", out.get_bytes())
-        signal_code = self._signal_code(root)
+        signal_code = self._signal_code(root, response)
         response_wrapper = response.get("tRsp", {})
         payload = response_wrapper.get(0, {}) if isinstance(response_wrapper, dict) else {}
         if not isinstance(payload, dict) or 0 not in payload or not isinstance(payload[0], list):
@@ -314,7 +310,7 @@ class PackageGiftClient(HuyaWupClient):
         out.write_struct_end()
 
         root, response = self._send_wup("sequenceui", "getSequence", out.get_bytes())
-        signal_code = self._signal_code(root)
+        signal_code = self._signal_code(root, response)
         response_wrapper = response.get("tRsp", {})
         payload = response_wrapper.get(0, {}) if isinstance(response_wrapper, dict) else {}
         ret_code = int(payload.get(0, -1)) if isinstance(payload, dict) else -1
@@ -393,7 +389,7 @@ class PackageGiftClient(HuyaWupClient):
         response_wrapper = response.get("tRsp", {})
         payload = response_wrapper.get(0, {}) if isinstance(response_wrapper, dict) else {}
         return GiftSendResponse(
-            signal_code=self._signal_code(root),
+            signal_code=self._signal_code(root, response),
             pay_code=int(payload.get(0, -1)) if isinstance(payload, dict) else -1,
             item_type=int(payload.get(1, 0)) if isinstance(payload, dict) else 0,
             item_count=int(payload.get(2, 0)) if isinstance(payload, dict) else 0,
@@ -437,9 +433,14 @@ class HuyaMobileBotV2:
             self.package_client = PackageGiftClient(self.cookie_str)
             inventory = self.package_client.query_tiger_food(self.pid)
             if inventory.signal_code != "0":
+                hint = (
+                    "网关返回 905（UserId/Cookie 鉴权失败），请更新 HUYA_COOKIE"
+                    if inventory.signal_code == "905"
+                    else "请检查 Cookie 和 WUP 响应"
+                )
                 log(
                     "ERROR",
-                    f"Cookie WUP 校验失败（协议码 {inventory.signal_code or '缺失'}，Cookie 可能已过期失效）。",
+                    f"Cookie WUP 校验失败（协议码 {inventory.signal_code or '缺失'}，{hint}）。",
                 )
                 return False
             log(
@@ -592,7 +593,7 @@ class HuyaMobileBotV2:
                     f"{f'，{claim.signal_description}' if claim.signal_description else ''}"
                 )
                 return result
-            if claim.business_code not in (None, 0):
+            if claim.business_code != 0:
                 result["detail"] = f"领取失败：业务状态码 {claim.business_code}"
                 return result
 
@@ -601,20 +602,18 @@ class HuyaMobileBotV2:
                 if attempt:
                     time.sleep(0.5)
                 after = self.welfare_client.query_welfare(self.pid)
-                if after.signal_code != "0" or after.business_code != 0:
-                    result["detail"] = "领取后状态查询失败"
-                    return result
-                if after.state == 4:
+                if after.signal_code == "0" and after.business_code == 0 and after.state == 4:
                     break
-            if after is None or after.state != 4:
-                result["detail"] = "领取响应未被状态查询确认"
-                return result
 
             item_count = claim.item_count or 10
             result["success"] = True
             result["item_count"] = item_count
             result["status"] = "领取成功"
-            result["detail"] = f"成功领取移动端专属福利（虎粮 x{item_count}）"
+            result["detail"] = (
+                f"成功领取移动端专属福利（虎粮 x{item_count}）"
+                if after and after.signal_code == "0" and after.business_code == 0 and after.state == 4
+                else f"领取请求已受理（虎粮 x{item_count}，状态复查待确认）"
+            )
             log("SUCCESS", f"🎉 {result['detail']}")
 
         except Exception as e:
@@ -831,10 +830,13 @@ class HuyaMobileBotV2:
             summary["current_score"] = raw.get("current_score")
             summary["next_score"] = raw.get("next_score")
 
-            # 今日亲密度按已确认赠送的两类虎粮数量累计。
+            # 优先使用接口返回的当日累计；接口不可用时才统计本次确认的赠送。
             daka_intimacy = summary.get("daka_intimacy", 0)
-            gift_intimacy = summary.get("gift_count", 0) + summary.get("super_fan_gift_count", 0)
-            summary["today_score"] = str(daka_intimacy + gift_intimacy)
+            if badge_info.get("raw"):
+                summary["today_score"] = str(int(badge_info.get("today_score") or 0) + daka_intimacy)
+            else:
+                gift_intimacy = summary.get("gift_count", 0) + summary.get("super_fan_gift_count", 0)
+                summary["today_score"] = str(daka_intimacy + gift_intimacy)
             summary["today_quota"] = str(badge_info.get("quota_score", 4000) or 4000)
 
             summary["all_success"] = all((
